@@ -142,6 +142,18 @@ struct ClaudeBarApp: App {
         return snapshot.overallStatus
     }
 
+    private var menuBarPercentageDisplay: MenuBarPercentageDisplay? {
+        guard settings.menuBarPercentageEnabled else { return nil }
+
+        return monitor.menuBarPercentageDisplay(
+            providerId: settings.menuBarPercentageProviderId,
+            quotaKey: settings.menuBarPercentageQuotaKey,
+            mode: settings.usageDisplayMode,
+            burnRateWarningEnabled: settings.burnRateWarningEnabled,
+            burnRateThreshold: settings.burnRateThreshold
+        )
+    }
+
     /// Current theme mode from settings
     private var currentThemeMode: ThemeMode {
         ThemeMode(rawValue: settings.themeMode) ?? .system
@@ -218,12 +230,21 @@ struct ClaudeBarApp: App {
             #endif
         } label: {
             // Show overall status + active session indicator in menu bar
-            StatusBarIcon(status: effectiveSelectedProviderStatus, activeSession: sessionMonitor.activeSession)
-                .appThemeProvider(themeModeId: settings.themeMode)
+            if let display = menuBarPercentageDisplay {
+                StatusBarPercentageLabel(display: display, activeSession: sessionMonitor.activeSession)
+                    .appThemeProvider(themeModeId: settings.themeMode)
+            } else {
+                StatusBarIcon(status: effectiveSelectedProviderStatus, activeSession: sessionMonitor.activeSession)
+                    .appThemeProvider(themeModeId: settings.themeMode)
+            }
         }
         .menuBarExtraStyle(.window)
     }
 
+}
+
+private func sessionPhaseColor(_ phase: ClaudeSession.Phase) -> Color {
+    phase.color
 }
 
 /// The menu bar icon that reflects the overall quota status.
@@ -272,9 +293,56 @@ struct StatusBarIcon: View {
     private var iconColor: Color {
         theme.statusColor(for: status)
     }
+}
 
-    private func sessionPhaseColor(_ phase: ClaudeSession.Phase) -> Color {
-        phase.color
+/// The menu bar percentage label for an opt-in provider/quota selection.
+struct StatusBarPercentageLabel: View {
+    let display: MenuBarPercentageDisplay
+    var activeSession: ClaudeSession? = nil
+
+    @Environment(\.appTheme) private var theme
+
+    var body: some View {
+        let statusColor = theme.statusColor(for: display.status)
+
+        HStack(spacing: 3) {
+            if let session = activeSession {
+                Image(systemName: "terminal.fill")
+                    .symbolRenderingMode(.palette)
+                    .foregroundStyle(sessionPhaseColor(session.phase))
+            }
+
+            Image(nsImage: StatusBarPercentageImageRenderer.image(
+                text: display.text,
+                color: statusColor
+            ))
+            .renderingMode(.original)
+            .accessibilityLabel(display.text)
+        }
+    }
+
+}
+
+/// Renders status text as an original-color image because macOS can ignore
+/// `Text.foregroundStyle` inside a `MenuBarExtra` label.
+private enum StatusBarPercentageImageRenderer {
+    @MainActor
+    static func image(text: String, color: Color) -> NSImage {
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .semibold)
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: NSColor(color),
+        ]
+        let attributedText = NSAttributedString(string: text, attributes: attributes)
+        let textSize = attributedText.size()
+        let imageSize = NSSize(width: ceil(textSize.width), height: ceil(textSize.height))
+        let image = NSImage(size: imageSize, flipped: false) { _ in
+            attributedText.draw(at: .zero)
+            return true
+        }
+        image.isTemplate = false
+
+        return image
     }
 }
 
