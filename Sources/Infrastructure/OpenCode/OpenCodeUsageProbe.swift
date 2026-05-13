@@ -2,6 +2,11 @@ import Foundation
 import Domain
 
 /// Queries local opencode DB for Go usage quotas — 5h/$12, weekly/$30, monthly/$60.
+///
+/// Window semantics match the OpenCode dashboard:
+/// - 5-hour: rolling window ending at `now`; reset = oldest message in window + 5h
+/// - Weekly: fixed UTC Monday → Monday
+/// - Monthly: anchored to the user's first opencode-go message (day-of-month preserved)
 public struct OpenCodeUsageProbe: UsageProbe {
 
     static let fiveHourLimit: Double = 12.0
@@ -22,62 +27,73 @@ public struct OpenCodeUsageProbe: UsageProbe {
     // MARK: - UsageProbe
 
     public func isAvailable() async -> Bool {
-        guard cliExecutor.locate("opencode") != nil else {
-            AppLog.probes.debug("OpenCode: CLI not found in PATH")
-            return false
-        }
-        do {
-            let result = try cliExecutor.execute(
-                binary: "opencode",
-                args: ["db", "path"],
-                input: nil,
-                timeout: timeout,
-                workingDirectory: nil,
-                autoResponses: [:]
-            )
-            let dbPath = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
-            let exists = FileManager.default.fileExists(atPath: dbPath)
-            if !exists {
-                AppLog.probes.debug("OpenCode: DB not found at \(dbPath)")
-            }
-            return exists
-        } catch {
-            AppLog.probes.debug("OpenCode: DB check failed - \(error.localizedDescription)")
-            return false
-        }
+        cliExecutor.locate("opencode") != nil
     }
 
     public func probe() async throws -> UsageSnapshot {
-        guard cliExecutor.locate("opencode") != nil else {
+        guard let opencodePath = cliExecutor.locate("opencode") else {
             throw ProbeError.cliNotFound("opencode")
         }
 
-        let windowData = try await runCombinedWindowQuery()
-        let windows = try Self.parseWindowCosts(windowData)
-
-        let fiveHourRemaining = Self.percentRemaining(used: windows.fiveHourCost, limit: Self.fiveHourLimit)
-        let weeklyRemaining = Self.percentRemaining(used: windows.weeklyCost, limit: Self.weeklyLimit)
-        let monthlyRemaining = Self.percentRemaining(used: windows.monthlyCost, limit: Self.monthlyLimit)
-
         let now = Date()
+        let fiveHourMs = Self.millisSinceEpoch(now.addingTimeInterval(-5 * 3600))
+        let weekStart = Self.startOfWeekUTC(from: now)
+        let weekEnd = Self.endOfWeekUTC(from: now)
+
+        // Query 1: 5h cost + weekly cost + 5h oldest + lifetime anchor
+        let primary = try Self.parsePrimaryWindow(
+            try runDBQuery(
+                opencodePath: opencodePath,
+                sql: Self.primarySQL(
+                    fiveHourMs: fiveHourMs,
+                    weekStartMs: Self.millisSinceEpoch(weekStart)
+                )
+            )
+        )
+
+        // Query 2 (only if user has any opencode-go usage): monthly cost in anchored window
+        let monthlyCost: Double
+        let monthEnd: Date
+        if let anchorMs = primary.anchorMs {
+            let anchor = Date(timeIntervalSince1970: TimeInterval(anchorMs) / 1000)
+            let bounds = Self.anchoredMonthBounds(now: now, anchor: anchor)
+            monthEnd = bounds.end
+            monthlyCost = try Self.parseMonthlyCost(
+                try runDBQuery(
+                    opencodePath: opencodePath,
+                    sql: Self.monthlySQL(
+                        monthStartMs: Self.millisSinceEpoch(bounds.start),
+                        monthEndMs: Self.millisSinceEpoch(bounds.end)
+                    )
+                )
+            )
+        } else {
+            monthlyCost = 0
+            monthEnd = now.addingTimeInterval(30 * 86400) // placeholder when no usage exists yet
+        }
+
+        let fiveHourRemaining = Self.percentRemaining(used: primary.fiveHourCost, limit: Self.fiveHourLimit)
+        let weeklyRemaining = Self.percentRemaining(used: primary.weeklyCost, limit: Self.weeklyLimit)
+        let monthlyRemaining = Self.percentRemaining(used: monthlyCost, limit: Self.monthlyLimit)
+
         let quotas: [UsageQuota] = [
             UsageQuota(
                 percentRemaining: fiveHourRemaining,
                 quotaType: .session,
                 providerId: "opencode-go",
-                resetsAt: Self.fiveHourResetDate(from: windows.fiveHourOldestMs, fallback: now)
+                resetsAt: Self.fiveHourResetDate(from: primary.fiveHourOldestMs, fallback: now)
             ),
             UsageQuota(
                 percentRemaining: weeklyRemaining,
                 quotaType: .weekly,
                 providerId: "opencode-go",
-                resetsAt: Self.endOfWeek(from: now)
+                resetsAt: weekEnd
             ),
             UsageQuota(
                 percentRemaining: monthlyRemaining,
                 quotaType: .timeLimit("Monthly"),
                 providerId: "opencode-go",
-                resetsAt: Self.endOfMonth(from: now)
+                resetsAt: monthEnd
             ),
         ]
 
@@ -90,32 +106,43 @@ public struct OpenCodeUsageProbe: UsageProbe {
         )
     }
 
-    // MARK: - DB Query
+    // MARK: - DB Queries
 
-    private func runCombinedWindowQuery() async throws -> Data {
-        let now = Date()
-        let fiveHourMs = Self.millisSinceEpoch(now.addingTimeInterval(-5 * 3600))
-        let weekStartMs = Self.millisSinceEpoch(Self.startOfWeek(from: now))
-        let monthStartMs = Self.millisSinceEpoch(Self.startOfMonth(from: now))
-        let earliestCutoffMs = min(fiveHourMs, weekStartMs, monthStartMs) // handles window boundary crosses
+    /// Filtered row source: opencode-go assistant messages with a numeric cost,
+    /// using `data.time.created` when present (fallback to the column).
+    private static let filteredSubquery = """
+    SELECT
+      CAST(COALESCE(json_extract(data, '$.time.created'), time_created) AS INTEGER) AS t,
+      CAST(json_extract(data, '$.cost') AS REAL) AS cost
+    FROM message
+    WHERE json_valid(data)
+      AND json_extract(data, '$.providerID') = 'opencode-go'
+      AND json_extract(data, '$.role') = 'assistant'
+      AND json_type(data, '$.cost') IN ('integer', 'real')
+    """
 
-        let sql = """
-        SELECT
-          COALESCE(SUM(CASE WHEN time_created >= \(fiveHourMs) THEN CAST(json_extract(data, '$.cost') AS REAL) ELSE 0 END), 0) as five_hour_cost,
-          COALESCE(SUM(CASE WHEN time_created >= \(weekStartMs) THEN CAST(json_extract(data, '$.cost') AS REAL) ELSE 0 END), 0) as weekly_cost,
-          COALESCE(SUM(CASE WHEN time_created >= \(monthStartMs) THEN CAST(json_extract(data, '$.cost') AS REAL) ELSE 0 END), 0) as monthly_cost,
-          MIN(CASE WHEN time_created >= \(fiveHourMs) THEN time_created ELSE NULL END) as five_hour_oldest_ms
-        FROM message
-        WHERE json_extract(data, '$.role') = 'assistant'
-          AND json_extract(data, '$.providerID') = 'opencode-go'
-          AND time_created >= \(earliestCutoffMs)
+    static func primarySQL(fiveHourMs: Int64, weekStartMs: Int64) -> String {
         """
-        return try await runDBQuery(sql)
+        SELECT
+          COALESCE(SUM(CASE WHEN t >= \(fiveHourMs) THEN cost ELSE 0 END), 0) AS five_hour_cost,
+          COALESCE(SUM(CASE WHEN t >= \(weekStartMs) THEN cost ELSE 0 END), 0) AS weekly_cost,
+          MIN(CASE WHEN t >= \(fiveHourMs) THEN t ELSE NULL END) AS five_hour_oldest_ms,
+          MIN(t) AS anchor_ms
+        FROM (\(filteredSubquery))
+        """
     }
 
-    private func runDBQuery(_ sql: String) async throws -> Data {
+    static func monthlySQL(monthStartMs: Int64, monthEndMs: Int64) -> String {
+        """
+        SELECT COALESCE(SUM(cost), 0) AS monthly_cost
+        FROM (\(filteredSubquery))
+        WHERE t >= \(monthStartMs) AND t < \(monthEndMs)
+        """
+    }
+
+    private func runDBQuery(opencodePath: String, sql: String) throws -> Data {
         let result = try cliExecutor.execute(
-            binary: "opencode",
+            binary: opencodePath,
             args: ["db", sql, "--format", "json"],
             input: nil,
             timeout: timeout,
@@ -136,19 +163,31 @@ public struct OpenCodeUsageProbe: UsageProbe {
         return data
     }
 
-    // MARK: - Static Helpers (testable)
+    // MARK: - Parsing (testable)
 
-    static func parseWindowCosts(_ data: Data) throws -> WindowCosts {
-        let rows = try JSONDecoder().decode([WindowRow].self, from: data)
-        guard let row = rows.first else {
-            throw ProbeError.parseFailed("No window cost data")
+    static func parsePrimaryWindow(_ data: Data) throws -> PrimaryWindow {
+        struct Row: Decodable {
+            let five_hour_cost: Double
+            let weekly_cost: Double
+            let five_hour_oldest_ms: Int64?
+            let anchor_ms: Int64?
         }
-        return WindowCosts(
+        let rows = try JSONDecoder().decode([Row].self, from: data)
+        guard let row = rows.first else {
+            throw ProbeError.parseFailed("No primary window data")
+        }
+        return PrimaryWindow(
             fiveHourCost: row.five_hour_cost,
             weeklyCost: row.weekly_cost,
-            monthlyCost: row.monthly_cost,
-            fiveHourOldestMs: row.five_hour_oldest_ms
+            fiveHourOldestMs: row.five_hour_oldest_ms,
+            anchorMs: row.anchor_ms
         )
+    }
+
+    static func parseMonthlyCost(_ data: Data) throws -> Double {
+        struct Row: Decodable { let monthly_cost: Double }
+        let rows = try JSONDecoder().decode([Row].self, from: data)
+        return rows.first?.monthly_cost ?? 0
     }
 
     /// Returns percentage remaining, clamped to [0, 100]. Over-limit → 0% → .depleted.
@@ -157,7 +196,7 @@ public struct OpenCodeUsageProbe: UsageProbe {
         return max(0, min(100, (limit - used) / limit * 100))
     }
 
-    // MARK: - Time helpers
+    // MARK: - Time helpers (UTC, matches OpenCode dashboard)
 
     static func millisSinceEpoch(_ date: Date) -> Int64 {
         Int64(date.timeIntervalSince1970 * 1000)
@@ -171,42 +210,58 @@ public struct OpenCodeUsageProbe: UsageProbe {
             .addingTimeInterval(5 * 3600)
     }
 
-    static func startOfWeek(from date: Date) -> Date {
-        let cal = Calendar.current
-        let weekday = cal.component(.weekday, from: date)
-        return cal.startOfDay(for: cal.date(byAdding: .day, value: -(weekday - 1), to: date) ?? date)
+    /// UTC Monday at 00:00:00 of the week containing `date`.
+    static func startOfWeekUTC(from date: Date) -> Date {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(secondsFromGMT: 0) ?? .gmt
+        let weekday = cal.component(.weekday, from: date)   // 1=Sun, 2=Mon, ..., 7=Sat
+        let daysFromMonday = (weekday + 5) % 7              // Mon=0, Tue=1, ..., Sun=6
+        let monday = cal.date(byAdding: .day, value: -daysFromMonday, to: date) ?? date
+        return cal.startOfDay(for: monday)
     }
 
-    static func endOfWeek(from date: Date) -> Date {
-        Calendar.current.date(byAdding: .day, value: 7, to: startOfWeek(from: date)) ?? date
+    /// UTC Monday at 00:00:00 of the week AFTER the week containing `date`.
+    static func endOfWeekUTC(from date: Date) -> Date {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(secondsFromGMT: 0) ?? .gmt
+        return cal.date(byAdding: .day, value: 7, to: startOfWeekUTC(from: date)) ?? date
     }
 
-    static func startOfMonth(from date: Date) -> Date {
-        let cal = Calendar.current
-        return cal.date(from: cal.dateComponents([.year, .month], from: date)) ?? date
-    }
+    /// Returns the current monthly window `[start, end)` anchored to the day-of-month and
+    /// time-of-day of `anchor`. E.g., anchor = Mar 14 14:30 UTC, now = Apr 2 →
+    /// `[Mar 14 14:30, Apr 14 14:30)`. When the anchor day doesn't exist in the target month
+    /// (e.g., 31), Calendar clamps to the last valid day.
+    static func anchoredMonthBounds(now: Date, anchor: Date) -> (start: Date, end: Date) {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(secondsFromGMT: 0) ?? .gmt
 
-    static func endOfMonth(from date: Date) -> Date {
-        let cal = Calendar.current
-        guard let start = cal.date(from: cal.dateComponents([.year, .month], from: date)) else {
-            return date
+        let anchorTime = cal.dateComponents([.day, .hour, .minute, .second], from: anchor)
+        let nowMonth = cal.dateComponents([.year, .month], from: now)
+
+        var comps = DateComponents()
+        comps.year = nowMonth.year
+        comps.month = nowMonth.month
+        comps.day = anchorTime.day
+        comps.hour = anchorTime.hour
+        comps.minute = anchorTime.minute
+        comps.second = anchorTime.second
+
+        var start = cal.date(from: comps) ?? anchor
+        if start > now {
+            start = cal.date(byAdding: .month, value: -1, to: start) ?? start
         }
-        return cal.date(byAdding: DateComponents(month: 1, second: -1), to: start) ?? date
+        let end = cal.date(byAdding: .month, value: 1, to: start)
+            ?? start.addingTimeInterval(30 * 86400)
+        return (start, end)
     }
 }
 
-// MARK: - DB Row Models
+// MARK: - DB Row Model
 
-private struct WindowRow: Decodable {
-    let five_hour_cost: Double
-    let weekly_cost: Double
-    let monthly_cost: Double
-    let five_hour_oldest_ms: Int64?
-}
-
-public struct WindowCosts: Sendable {
-    public let fiveHourCost: Double
-    public let weeklyCost: Double
-    public let monthlyCost: Double
-    public let fiveHourOldestMs: Int64?
+/// Result of the primary window query. Internal so tests can build it directly.
+struct PrimaryWindow: Sendable, Equatable {
+    let fiveHourCost: Double
+    let weeklyCost: Double
+    let fiveHourOldestMs: Int64?
+    let anchorMs: Int64?
 }
