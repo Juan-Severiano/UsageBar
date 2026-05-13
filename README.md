@@ -8,7 +8,7 @@
 [![Platform](https://img.shields.io/badge/Platform-macOS%2015-blue.svg)](https://developer.apple.com)
 [![Homebrew](https://img.shields.io/badge/Homebrew-Install-brightgreen.svg)](https://formulae.brew.sh/cask/claudebar)
 
-A macOS menu bar application that monitors AI coding assistant usage quotas. Keep track of your Claude, Codex, Gemini, GitHub Copilot, Antigravity, Z.ai, Kimi, Kiro, and Amp usage at a glance.
+A macOS menu bar application that monitors AI coding assistant usage quotas. Keep track of your Claude, Codex, Gemini, GitHub Copilot, Antigravity, Z.ai, Kimi, Kiro, Amp, OpenCode Go, and more at a glance.
 
 <table align="center">
   <tr>
@@ -56,6 +56,7 @@ A macOS menu bar application that monitors AI coding assistant usage quotas. Kee
   - [Kimi](https://www.kimi.com/code/console) (`kimi`) - CLI mode (recommended) or API mode (see below)
   - [Kiro](https://kiro.dev) (`kiro-cli`) - Requires kiro-cli installation (see below)
   - [Amp](https://ampcode.com) (`amp`) - Auto-detected when CLI is installed
+  - [OpenCode](https://opencode.ai) (`opencode`) - Tracks OpenCode Go usage windows (5hr/$12, weekly/$30, monthly/$60) via local SQLite DB
 
 ### Kimi Setup
 
