@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 
-/// OpenCode provider - monitors daily token and cost usage from local DB.
+/// OpenCode Go provider — monitors 5-hour, weekly, and monthly cost usage from local OpenCode SQLite DB.
 /// Observable class with its own state (isSyncing, snapshot, error).
 @Observable
 public final class OpenCodeProvider: AIProvider, @unchecked Sendable {

@@ -58,6 +58,11 @@ public struct OpenCodeUsageProbe: UsageProbe {
     public func probe() async throws -> UsageSnapshot {
         AppLog.probes.info("Starting OpenCode probe...")
 
+        guard cliExecutor.locate("opencode") != nil else {
+            AppLog.probes.error("OpenCode probe failed: opencode binary not found")
+            throw ProbeError.cliNotFound("opencode")
+        }
+
         let windowData = try await runCombinedWindowQuery()
         let windows = try Self.parseWindowCosts(windowData)
 
@@ -90,7 +95,7 @@ public struct OpenCodeUsageProbe: UsageProbe {
         AppLog.probes.info("OpenCode probe success: 5hr \(Int(fiveHourRemaining))%, weekly \(Int(weeklyRemaining))%, monthly \(Int(monthlyRemaining))%")
 
         return UsageSnapshot(
-            providerId: "opencode",
+            providerId: "opencode-go",
             quotas: quotas,
             capturedAt: Date()
         )
@@ -104,6 +109,9 @@ public struct OpenCodeUsageProbe: UsageProbe {
         let fiveHourMs = Self.millisSinceEpoch(now.addingTimeInterval(-5 * 3600))
         let weekStartMs = Self.millisSinceEpoch(Self.startOfWeek(from: now))
         let monthStartMs = Self.millisSinceEpoch(Self.startOfMonth(from: now))
+        // Use earliest cutoff so 5-hour and weekly windows still work when
+        // they cross a month boundary (e.g., now is May 1 at 2am, weekStart is April 28).
+        let earliestCutoffMs = min(fiveHourMs, weekStartMs, monthStartMs)
 
         let sql = """
         SELECT
@@ -112,7 +120,7 @@ public struct OpenCodeUsageProbe: UsageProbe {
           COALESCE(SUM(CASE WHEN time_created >= \(monthStartMs) THEN CAST(json_extract(data, '$.cost') AS REAL) ELSE 0 END), 0) as monthly_cost
         FROM message
         WHERE json_extract(data, '$.role') = 'assistant'
-          AND time_created >= \(monthStartMs)
+          AND time_created >= \(earliestCutoffMs)
         """
         return try await runDBQuery(sql)
     }
@@ -155,9 +163,11 @@ public struct OpenCodeUsageProbe: UsageProbe {
         )
     }
 
+    /// Returns percentage remaining. Negative when over limit (handled by `QuotaStatus.from`
+    /// which maps `<= 0` to `.depleted`). UsageQuota caps at 100 internally.
     static func percentRemaining(used: Double, limit: Double) -> Double {
         guard limit > 0 else { return 100 }
-        return max(0, min(100, (limit - used) / limit * 100))
+        return (limit - used) / limit * 100
     }
 
     // MARK: - Time helpers
