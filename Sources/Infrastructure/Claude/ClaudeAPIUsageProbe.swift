@@ -1,6 +1,41 @@
 import Foundation
 import Domain
 
+/// Thread-safe TTL cache for a successful `UsageSnapshot`. Quota numbers
+/// move on multi-hour timescales (5h session, 7d weekly), so returning the
+/// most recent successful snapshot for a short window costs nothing in
+/// freshness and dramatically reduces requests against the rate-limited
+/// usage endpoint.
+private final class SnapshotCache: @unchecked Sendable {
+    private var cached: UsageSnapshot?
+    private var cachedAt: Date?
+    private let ttl: TimeInterval
+    private let lock = NSLock()
+
+    init(ttl: TimeInterval) {
+        self.ttl = ttl
+    }
+
+    func get(now: Date = Date()) -> UsageSnapshot? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let cached, let cachedAt else { return nil }
+        if now.timeIntervalSince(cachedAt) > ttl {
+            self.cached = nil
+            self.cachedAt = nil
+            return nil
+        }
+        return cached
+    }
+
+    func set(_ snapshot: UsageSnapshot, now: Date = Date()) {
+        lock.lock()
+        defer { lock.unlock() }
+        self.cached = snapshot
+        self.cachedAt = now
+    }
+}
+
 /// Thread-safe holder for an active rate-limit window. When the API returns
 /// HTTP 429, the probe stores `retryAt` here so subsequent calls short-circuit
 /// without re-hitting the endpoint until the window has elapsed.
@@ -81,12 +116,19 @@ public struct ClaudeAPIUsageProbe: UsageProbe, @unchecked Sendable {
     private let timeout: TimeInterval
     private let cache = CredentialCache()
     private let rateLimit = RateLimitState()
+    private let snapshotCache: SnapshotCache
 
     /// Fallback retry window applied when the API returns 429 without a
     /// usable `Retry-After` header. Five minutes is conservative enough to
     /// stop hammering a throttled endpoint while still picking back up
     /// reasonably quickly once the window opens.
     static let defaultRetryAfter: TimeInterval = 5 * 60
+
+    /// Default TTL for the in-memory snapshot cache. Five minutes is well
+    /// below the granularity at which quota numbers change (5h / 7d) but
+    /// long enough to drop the 60s monitor-tick polling rate to ~12/hour,
+    /// safely below Anthropic's per-token throttle for this endpoint.
+    public static let defaultSnapshotCacheTTL: TimeInterval = 5 * 60
 
     // API endpoints
     private static let usageURL = URL(string: "https://api.anthropic.com/api/oauth/usage")!
@@ -101,11 +143,13 @@ public struct ClaudeAPIUsageProbe: UsageProbe, @unchecked Sendable {
     public init(
         credentialLoader: ClaudeCredentialLoader = ClaudeCredentialLoader(),
         networkClient: any NetworkClient = URLSession.shared,
-        timeout: TimeInterval = 15
+        timeout: TimeInterval = 15,
+        snapshotCacheTTL: TimeInterval = Self.defaultSnapshotCacheTTL
     ) {
         self.credentialLoader = credentialLoader
         self.networkClient = networkClient
         self.timeout = timeout
+        self.snapshotCache = SnapshotCache(ttl: snapshotCacheTTL)
     }
 
     public func isAvailable() async -> Bool {
@@ -114,6 +158,14 @@ public struct ClaudeAPIUsageProbe: UsageProbe, @unchecked Sendable {
     }
 
     public func probe() async throws -> UsageSnapshot {
+        // Serve a fresh cached snapshot before doing anything else. This is
+        // the dominant code path during normal monitor polling and means
+        // we make ~1 actual HTTP call per cache TTL instead of one per
+        // monitor tick — well under Anthropic's per-token throttle.
+        if let cached = snapshotCache.get() {
+            return cached
+        }
+
         // Honor an active rate-limit window before doing any work so we stop
         // hammering the endpoint while Anthropic is throttling us.
         if let retryAt = rateLimit.activeRetryAt() {
@@ -201,7 +253,9 @@ public struct ClaudeAPIUsageProbe: UsageProbe, @unchecked Sendable {
             }
         }
 
-        return parseUsageResponse(usageData, subscriptionType: credentials.oauth.subscriptionType)
+        let snapshot = parseUsageResponse(usageData, subscriptionType: credentials.oauth.subscriptionType)
+        snapshotCache.set(snapshot)
+        return snapshot
     }
 
     // MARK: - Token Refresh

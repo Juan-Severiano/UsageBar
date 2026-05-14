@@ -73,6 +73,81 @@ struct ClaudeAPIUsageProbeTests {
         #expect(await probe.isAvailable() == false)
     }
 
+    // MARK: - Snapshot Cache (TTL) Tests
+
+    @Test
+    func `probe serves cached snapshot on subsequent calls within TTL`() async throws {
+        let tempDir = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let futureExpiry = Date().addingTimeInterval(3600).timeIntervalSince1970 * 1000
+        try createCredentialsFile(at: tempDir, expiresAt: futureExpiry, subscriptionType: "claude_max")
+
+        let mockNetwork = MockNetworkClient()
+        let responseJSON = """
+        {
+          "five_hour": { "utilization": 25.0, "resets_at": "2025-01-15T10:00:00Z" }
+        }
+        """.data(using: .utf8)!
+        let response = HTTPURLResponse(
+            url: URL(string: "https://api.anthropic.com")!,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: nil
+        )!
+        given(mockNetwork).request(.any).willReturn((responseJSON, response))
+
+        let loader = ClaudeCredentialLoader(homeDirectory: tempDir.path, useKeychain: false)
+        let probe = ClaudeAPIUsageProbe(credentialLoader: loader, networkClient: mockNetwork)
+
+        let first = try await probe.probe()
+        let second = try await probe.probe()
+        let third = try await probe.probe()
+
+        // All three calls return the same cached snapshot...
+        #expect(first.quotas.first?.percentRemaining == 75.0)
+        #expect(second.quotas.first?.percentRemaining == 75.0)
+        #expect(third.quotas.first?.percentRemaining == 75.0)
+        // ...but only the first one actually hit the network.
+        verify(mockNetwork).request(.any).called(1)
+    }
+
+    @Test
+    func `probe bypasses cache when TTL is zero`() async throws {
+        let tempDir = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let futureExpiry = Date().addingTimeInterval(3600).timeIntervalSince1970 * 1000
+        try createCredentialsFile(at: tempDir, expiresAt: futureExpiry, subscriptionType: "claude_max")
+
+        let mockNetwork = MockNetworkClient()
+        let responseJSON = """
+        {
+          "five_hour": { "utilization": 25.0, "resets_at": "2025-01-15T10:00:00Z" }
+        }
+        """.data(using: .utf8)!
+        let response = HTTPURLResponse(
+            url: URL(string: "https://api.anthropic.com")!,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: nil
+        )!
+        given(mockNetwork).request(.any).willReturn((responseJSON, response))
+
+        let loader = ClaudeCredentialLoader(homeDirectory: tempDir.path, useKeychain: false)
+        // TTL=0 means every entry is immediately stale, so every probe re-fetches.
+        let probe = ClaudeAPIUsageProbe(
+            credentialLoader: loader,
+            networkClient: mockNetwork,
+            snapshotCacheTTL: 0
+        )
+
+        _ = try await probe.probe()
+        _ = try await probe.probe()
+
+        verify(mockNetwork).request(.any).called(2)
+    }
+
     // MARK: - Rate Limit (HTTP 429) Tests
 
     @Test
