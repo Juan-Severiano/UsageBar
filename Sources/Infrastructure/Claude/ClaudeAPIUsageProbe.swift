@@ -25,7 +25,9 @@ private final class SnapshotCache: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         guard let cached, let cachedAt else { return nil }
-        if now.timeIntervalSince(cachedAt) > ttl {
+        // Inclusive comparison so `ttl == 0` is always immediately stale.
+        // With `>`, a 0-TTL cache would still hit within the same instant.
+        if now.timeIntervalSince(cachedAt) >= ttl {
             self.cached = nil
             self.cachedAt = nil
             return nil
