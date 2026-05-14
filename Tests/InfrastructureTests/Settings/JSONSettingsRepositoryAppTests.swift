@@ -107,6 +107,24 @@ struct JSONSettingsRepositoryAppTests {
     }
 
     @Test
+    func `menuBarDurationEnabled defaults to false`() {
+        let (repo, dir) = makeRepository()
+        defer { cleanup(dir) }
+
+        #expect(repo.menuBarDurationEnabled() == false)
+    }
+
+    @Test
+    func `setMenuBarDurationEnabled persists value`() {
+        let (repo, dir) = makeRepository()
+        defer { cleanup(dir) }
+
+        repo.setMenuBarDurationEnabled(true)
+
+        #expect(repo.menuBarDurationEnabled() == true)
+    }
+
+    @Test
     func `showDailyUsageCards defaults to true`() {
         let (repo, dir) = makeRepository()
         defer { cleanup(dir) }

@@ -65,8 +65,15 @@ struct MenuBarDurationDisplayTests {
 
     @Test
     func `status uses pace aware logic when burn rate warning enabled`() {
-        let q = quota(percentRemaining: 35, resetsAt: nil)
+        // 35% remaining would be .warning under absolute thresholds, but 4h
+        // of a 5h session have elapsed (percentTimeElapsed = 80), so the burn
+        // rate is 65/80 = 0.81 — well under the 1.5 threshold. Pace-aware
+        // logic lifts the status back to .healthy.
+        let q = quota(percentRemaining: 35, resetsAt: Date().addingTimeInterval(3600))
         let display = MenuBarDurationDisplay(quota: q, burnRateWarningEnabled: true, burnRateThreshold: 1.5)
-        #expect(display.status == .warning)
+        #expect(display.status == .healthy)
+        // Sanity-check: the absolute-threshold path on the same quota returns .warning,
+        // confirming this test actually exercises the pace-aware branch.
+        #expect(q.status == .warning)
     }
 }
