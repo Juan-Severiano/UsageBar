@@ -168,7 +168,7 @@ public final class ClaudeProvider: AIProvider, @unchecked Sendable {
             snapshot = await attachDailyReport(to: newSnapshot)
             lastError = nil
             return snapshot!
-        } catch {
+        } catch let primaryError {
             if let fallback = await fallbackProbe() {
                 do {
                     let newSnapshot = try await fallback.probe()
@@ -176,13 +176,17 @@ public final class ClaudeProvider: AIProvider, @unchecked Sendable {
                     lastError = nil
                     return snapshot!
                 } catch {
-                    lastError = error
-                    throw error
+                    // Both probes failed. Surface the primary error — it is
+                    // the actual root cause (e.g. HTTP 429). The fallback's
+                    // failure is incidental and would otherwise mask it,
+                    // sending users chasing the wrong problem.
+                    lastError = primaryError
+                    throw primaryError
                 }
             }
 
-            lastError = error
-            throw error
+            lastError = primaryError
+            throw primaryError
         }
     }
 
