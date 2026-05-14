@@ -249,9 +249,17 @@ struct ClaudeAPIUsageProbeTests {
     // MARK: - Retry-After Parsing Tests
 
     @Test
-    func `parseRetryAfter accepts non-negative integer seconds`() {
+    func `parseRetryAfter accepts positive integer seconds`() {
         #expect(ClaudeAPIUsageProbe.parseRetryAfter("120") == 120)
-        #expect(ClaudeAPIUsageProbe.parseRetryAfter("0") == 0)
+        #expect(ClaudeAPIUsageProbe.parseRetryAfter("1") == 1)
+    }
+
+    @Test
+    func `parseRetryAfter rejects zero seconds`() {
+        // /api/oauth/usage has been observed returning Retry-After: 0 while
+        // still 429ing (anthropics/claude-code#30930). Treat 0 as no usable
+        // value so the caller applies its fallback window instead.
+        #expect(ClaudeAPIUsageProbe.parseRetryAfter("0") == nil)
     }
 
     @Test

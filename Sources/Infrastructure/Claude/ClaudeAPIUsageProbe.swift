@@ -498,7 +498,11 @@ public struct ClaudeAPIUsageProbe: UsageProbe, @unchecked Sendable {
         guard let value = value?.trimmingCharacters(in: .whitespaces), !value.isEmpty else {
             return nil
         }
-        if let seconds = TimeInterval(value), seconds >= 0 {
+        // Reject 0 — the /api/oauth/usage endpoint has been observed returning
+        // `Retry-After: 0` while continuing to 429, so treating 0 as "retry
+        // immediately" lands us right back in a hammering loop. See
+        // anthropics/claude-code#30930.
+        if let seconds = TimeInterval(value), seconds > 0 {
             return seconds
         }
         let formatter = DateFormatter()
