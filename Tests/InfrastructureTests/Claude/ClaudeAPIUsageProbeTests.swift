@@ -73,6 +73,142 @@ struct ClaudeAPIUsageProbeTests {
         #expect(await probe.isAvailable() == false)
     }
 
+    // MARK: - Rate Limit (HTTP 429) Tests
+
+    @Test
+    func `probe throws rateLimited when API returns 429 with Retry-After seconds`() async throws {
+        let tempDir = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let futureExpiry = Date().addingTimeInterval(3600).timeIntervalSince1970 * 1000
+        try createCredentialsFile(at: tempDir, expiresAt: futureExpiry)
+
+        let mockNetwork = MockNetworkClient()
+        let response = HTTPURLResponse(
+            url: URL(string: "https://api.anthropic.com")!,
+            statusCode: 429,
+            httpVersion: nil,
+            headerFields: ["Retry-After": "120"]
+        )!
+        given(mockNetwork).request(.any).willReturn((Data(), response))
+
+        let loader = ClaudeCredentialLoader(homeDirectory: tempDir.path, useKeychain: false)
+        let probe = ClaudeAPIUsageProbe(credentialLoader: loader, networkClient: mockNetwork)
+
+        let before = Date()
+        do {
+            _ = try await probe.probe()
+            Issue.record("Expected rateLimited error to be thrown")
+        } catch let error as ProbeError {
+            guard case .rateLimited(let retryAt) = error else {
+                Issue.record("Expected .rateLimited, got \(error)")
+                return
+            }
+            let delta = retryAt.timeIntervalSince(before)
+            #expect(delta >= 119 && delta <= 122)
+        }
+    }
+
+    @Test
+    func `probe defaults to 5 minute retry when 429 has no Retry-After header`() async throws {
+        let tempDir = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let futureExpiry = Date().addingTimeInterval(3600).timeIntervalSince1970 * 1000
+        try createCredentialsFile(at: tempDir, expiresAt: futureExpiry)
+
+        let mockNetwork = MockNetworkClient()
+        let response = HTTPURLResponse(
+            url: URL(string: "https://api.anthropic.com")!,
+            statusCode: 429,
+            httpVersion: nil,
+            headerFields: nil
+        )!
+        given(mockNetwork).request(.any).willReturn((Data(), response))
+
+        let loader = ClaudeCredentialLoader(homeDirectory: tempDir.path, useKeychain: false)
+        let probe = ClaudeAPIUsageProbe(credentialLoader: loader, networkClient: mockNetwork)
+
+        let before = Date()
+        do {
+            _ = try await probe.probe()
+            Issue.record("Expected rateLimited error to be thrown")
+        } catch let error as ProbeError {
+            guard case .rateLimited(let retryAt) = error else {
+                Issue.record("Expected .rateLimited, got \(error)")
+                return
+            }
+            let delta = retryAt.timeIntervalSince(before)
+            #expect(delta >= 299 && delta <= 302)
+        }
+    }
+
+    @Test
+    func `probe short-circuits subsequent calls within active rate-limit window`() async throws {
+        let tempDir = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let futureExpiry = Date().addingTimeInterval(3600).timeIntervalSince1970 * 1000
+        try createCredentialsFile(at: tempDir, expiresAt: futureExpiry)
+
+        let mockNetwork = MockNetworkClient()
+        let response = HTTPURLResponse(
+            url: URL(string: "https://api.anthropic.com")!,
+            statusCode: 429,
+            httpVersion: nil,
+            headerFields: ["Retry-After": "600"]
+        )!
+        given(mockNetwork).request(.any).willReturn((Data(), response))
+
+        let loader = ClaudeCredentialLoader(homeDirectory: tempDir.path, useKeychain: false)
+        let probe = ClaudeAPIUsageProbe(credentialLoader: loader, networkClient: mockNetwork)
+
+        // First call: hits the network and stores the rate-limit window
+        _ = try? await probe.probe()
+        // Second call: must throw immediately without re-hitting the network
+        _ = try? await probe.probe()
+
+        verify(mockNetwork).request(.any).called(1)
+    }
+
+    // MARK: - Retry-After Parsing Tests
+
+    @Test
+    func `parseRetryAfter accepts non-negative integer seconds`() {
+        #expect(ClaudeAPIUsageProbe.parseRetryAfter("120") == 120)
+        #expect(ClaudeAPIUsageProbe.parseRetryAfter("0") == 0)
+    }
+
+    @Test
+    func `parseRetryAfter accepts HTTP-date in the future`() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        // 2023-11-14 22:13:20 UTC + 60s = 2023-11-14 22:14:20 UTC
+        let result = ClaudeAPIUsageProbe.parseRetryAfter(
+            "Tue, 14 Nov 2023 22:14:20 GMT",
+            now: now
+        )
+        #expect(result == 60)
+    }
+
+    @Test
+    func `parseRetryAfter rejects past HTTP-dates`() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let result = ClaudeAPIUsageProbe.parseRetryAfter(
+            "Tue, 14 Nov 2023 22:00:00 GMT",
+            now: now
+        )
+        #expect(result == nil)
+    }
+
+    @Test
+    func `parseRetryAfter rejects malformed and empty values`() {
+        #expect(ClaudeAPIUsageProbe.parseRetryAfter(nil) == nil)
+        #expect(ClaudeAPIUsageProbe.parseRetryAfter("") == nil)
+        #expect(ClaudeAPIUsageProbe.parseRetryAfter("   ") == nil)
+        #expect(ClaudeAPIUsageProbe.parseRetryAfter("not a number") == nil)
+        #expect(ClaudeAPIUsageProbe.parseRetryAfter("-5") == nil)
+    }
+
     // MARK: - Probe Authentication Tests
 
     @Test

@@ -1,6 +1,33 @@
 import Foundation
 import Domain
 
+/// Thread-safe holder for an active rate-limit window. When the API returns
+/// HTTP 429, the probe stores `retryAt` here so subsequent calls short-circuit
+/// without re-hitting the endpoint until the window has elapsed.
+private final class RateLimitState: @unchecked Sendable {
+    private var retryAt: Date?
+    private let lock = NSLock()
+
+    /// Returns `retryAt` only if it is still in the future; otherwise clears
+    /// it and returns nil so the next probe is allowed through.
+    func activeRetryAt(now: Date = Date()) -> Date? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let retryAt else { return nil }
+        if retryAt <= now {
+            self.retryAt = nil
+            return nil
+        }
+        return retryAt
+    }
+
+    func set(retryAt: Date) {
+        lock.lock()
+        defer { lock.unlock() }
+        self.retryAt = retryAt
+    }
+}
+
 /// Thread-safe in-memory cache for Claude OAuth credentials with TTL.
 /// Avoids repeated Keychain/CLI lookups on every probe cycle while ensuring
 /// external credential changes (e.g. CLI re-login) are picked up.
@@ -53,6 +80,13 @@ public struct ClaudeAPIUsageProbe: UsageProbe, @unchecked Sendable {
     private let networkClient: any NetworkClient
     private let timeout: TimeInterval
     private let cache = CredentialCache()
+    private let rateLimit = RateLimitState()
+
+    /// Fallback retry window applied when the API returns 429 without a
+    /// usable `Retry-After` header. Five minutes is conservative enough to
+    /// stop hammering a throttled endpoint while still picking back up
+    /// reasonably quickly once the window opens.
+    static let defaultRetryAfter: TimeInterval = 5 * 60
 
     // API endpoints
     private static let usageURL = URL(string: "https://api.anthropic.com/api/oauth/usage")!
@@ -80,6 +114,13 @@ public struct ClaudeAPIUsageProbe: UsageProbe, @unchecked Sendable {
     }
 
     public func probe() async throws -> UsageSnapshot {
+        // Honor an active rate-limit window before doing any work so we stop
+        // hammering the endpoint while Anthropic is throttling us.
+        if let retryAt = rateLimit.activeRetryAt() {
+            AppLog.probes.info("Claude API: Skipping probe — rate-limited until \(retryAt)")
+            throw ProbeError.rateLimited(retryAt: retryAt)
+        }
+
         // Check cache first, fall back to loading from file/keychain
         // Only update cache when loading from file (not from cache hit) to preserve TTL
         // 仅在从文件加载时更新缓存，避免滑动续期导致 TTL 永不过期
@@ -279,6 +320,14 @@ public struct ClaudeAPIUsageProbe: UsageProbe, @unchecked Sendable {
             break
         case 401, 403:
             throw ProbeError.authenticationRequired
+        case 429:
+            let retryAfter = Self.parseRetryAfter(
+                httpResponse.value(forHTTPHeaderField: "Retry-After")
+            ) ?? Self.defaultRetryAfter
+            let retryAt = Date().addingTimeInterval(retryAfter)
+            rateLimit.set(retryAt: retryAt)
+            AppLog.probes.warning("Claude API: Rate limited (HTTP 429), retrying after \(Int(retryAfter))s")
+            throw ProbeError.rateLimited(retryAt: retryAt)
         default:
             AppLog.probes.error("Claude API: HTTP error \(httpResponse.statusCode)")
             throw ProbeError.executionFailed("HTTP error: \(httpResponse.statusCode)")
@@ -385,6 +434,26 @@ public struct ClaudeAPIUsageProbe: UsageProbe, @unchecked Sendable {
             accountTier: accountTier,
             costUsage: costUsage
         )
+    }
+
+    /// Parses an HTTP `Retry-After` header value into a duration.
+    /// Per RFC 7231 the value is either a non-negative integer of seconds, or
+    /// an HTTP-date. Returns nil for missing, malformed, or past-dated values
+    /// so the caller can apply its own fallback.
+    static func parseRetryAfter(_ value: String?, now: Date = Date()) -> TimeInterval? {
+        guard let value = value?.trimmingCharacters(in: .whitespaces), !value.isEmpty else {
+            return nil
+        }
+        if let seconds = TimeInterval(value), seconds >= 0 {
+            return seconds
+        }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+        guard let date = formatter.date(from: value) else { return nil }
+        let delta = date.timeIntervalSince(now)
+        return delta > 0 ? delta : nil
     }
 
     private func parseISODate(_ isoString: String?) -> Date? {
