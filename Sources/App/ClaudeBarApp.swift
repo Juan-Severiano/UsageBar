@@ -199,6 +199,9 @@ struct ClaudeBarApp: App {
         let providerIds: [String]?
     }
 
+    /// The current `RefreshLoopKey` derived from settings + monitor state. The
+    /// scene `.task(id:)` observes this, so any change here (cadence toggled,
+    /// selected or menu-bar provider switched) tears down and restarts the loop.
     private var refreshLoopKey: RefreshLoopKey {
         let interval = settings.refreshInterval
         return RefreshLoopKey(
@@ -211,13 +214,16 @@ struct ClaudeBarApp: App {
     /// While the dropdown is closed we only need the menu-bar provider(s) fresh,
     /// so narrow the periodic refresh to the selected + configured menu-bar
     /// provider when a menu-bar readout is on; otherwise just the selected
-    /// provider. Keeps background work minimal for energy (issue #67).
+    /// provider. Disabled providers are dropped — their readouts never render,
+    /// so polling them would be wasted work. Keeps background work minimal for
+    /// energy (issue #67).
     private var backgroundRefreshProviderIds: [String]? {
         guard settings.menuBarPercentageEnabled || settings.menuBarDurationEnabled else { return nil }
+        let enabledProviderIds = Set(monitor.enabledProviders.map(\.id))
         return [
             monitor.selectedProviderId,
             settings.menuBarPercentageProviderId,
-        ]
+        ].filter { enabledProviderIds.contains($0) }
     }
 
     private func startHookServer() {
