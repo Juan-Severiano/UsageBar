@@ -144,9 +144,10 @@ struct CopilotUsageProbeTests {
         #expect(snapshot.quotas.count == 1)
 
         let quota = snapshot.quotas.first!
-        #expect(quota.quotaType == .session)
+        #expect(quota.quotaType == .timeLimit("Monthly"))
+        #expect(quota.resetsAt != nil)
         #expect(quota.percentRemaining == 80.0)
-        #expect(quota.resetText == "10/50 requests")
+        #expect(quota.resetText == "10/50 AI credits")
     }
 
     @Test
@@ -196,8 +197,9 @@ struct CopilotUsageProbeTests {
         let snapshot = try await probe.probe()
 
         let quota = snapshot.quotas.first!
+        #expect(quota.resetsAt != nil)
         #expect(quota.percentRemaining == 50.0)
-        #expect(quota.resetText == "25/50 requests")
+        #expect(quota.resetText == "25/50 AI credits")
     }
 
     @Test
@@ -229,8 +231,9 @@ struct CopilotUsageProbeTests {
         let snapshot = try await probe.probe()
 
         let quota = snapshot.quotas.first!
+        #expect(quota.resetsAt != nil)
         #expect(quota.percentRemaining == 100.0)
-        #expect(quota.resetText == "0/50 requests")
+        #expect(quota.resetText == "0/50 AI credits")
     }
 
     @Test
@@ -271,8 +274,9 @@ struct CopilotUsageProbeTests {
 
         let quota = snapshot.quotas.first!
         // 100/300 = 33.33% used, 66.67% remaining
+        #expect(quota.resetsAt != nil)
         #expect(quota.percentRemaining.rounded() == 67.0)
-        #expect(quota.resetText == "100/300 requests")
+        #expect(quota.resetText == "100/300 AI credits")
     }
 
     @Test
@@ -312,8 +316,9 @@ struct CopilotUsageProbeTests {
 
         let quota = snapshot.quotas.first!
         // Should use default 50 (Free/Pro tier premium requests)
+        #expect(quota.resetsAt != nil)
         #expect(quota.percentRemaining == 50.0)
-        #expect(quota.resetText == "25/50 requests")
+        #expect(quota.resetText == "25/50 AI credits")
     }
 
     @Test
@@ -354,8 +359,9 @@ struct CopilotUsageProbeTests {
 
         let quota = snapshot.quotas.first!
         // 750/1500 = 50% used, 50% remaining
+        #expect(quota.resetsAt != nil)
         #expect(quota.percentRemaining == 50.0)
-        #expect(quota.resetText == "750/1500 requests")
+        #expect(quota.resetText == "750/1500 AI credits")
     }
 
     @Test
@@ -396,8 +402,9 @@ struct CopilotUsageProbeTests {
 
         let quota = snapshot.quotas.first!
         // Should fall back to default 50 when limit is invalid (0 or negative)
+        #expect(quota.resetsAt != nil)
         #expect(quota.percentRemaining == 50.0)
-        #expect(quota.resetText == "25/50 requests")
+        #expect(quota.resetText == "25/50 AI credits")
     }
 
     // MARK: - Manual Override Tests
@@ -478,8 +485,9 @@ struct CopilotUsageProbeTests {
         
         // Should return 100% remaining (zero Copilot usage)
         let quota = snapshot.quotas.first!
+        #expect(quota.resetsAt != nil)
         #expect(quota.percentRemaining == 100.0)
-        #expect(quota.resetText == "0/50 requests")
+        #expect(quota.resetText == "0/50 AI credits")
     }
 
     @Test
@@ -519,8 +527,9 @@ struct CopilotUsageProbeTests {
 
         let quota = snapshot.quotas.first!
         // Manual usage: 99/300 = 33% used, 67% remaining
+        #expect(quota.resetsAt != nil)
         #expect(quota.percentRemaining == 67.0)
-        #expect(quota.resetText == "99/300 requests (manual)")
+        #expect(quota.resetText == "99/300 AI credits (manual)")
     }
 
     @Test
@@ -564,8 +573,9 @@ struct CopilotUsageProbeTests {
 
         let quota = snapshot.quotas.first!
         // Should use manual value (50) not API value (10)
+        #expect(quota.resetsAt != nil)
         #expect(quota.resetText?.contains("(manual)") == true)
-        #expect(quota.resetText == "50/50 requests (manual)")
+        #expect(quota.resetText == "50/50 AI credits (manual)")
     }
 
     @Test
@@ -683,8 +693,9 @@ struct CopilotUsageProbeTests {
 
         let quota = snapshot.quotas.first!
         // 198% used = -98% remaining (594 requests of 300 limit)
+        #expect(quota.resetsAt != nil)
         #expect(quota.percentRemaining == -98.0)
-        #expect(quota.resetText == "594/300 requests (manual)")
+        #expect(quota.resetText == "594/300 AI credits (manual)")
     }
 
     @Test
@@ -724,8 +735,9 @@ struct CopilotUsageProbeTests {
 
         let quota = snapshot.quotas.first!
         // 99/50 = -98% remaining
+        #expect(quota.resetsAt != nil)
         #expect(quota.percentRemaining == -98.0)
-        #expect(quota.resetText == "99/50 requests (manual)")
+        #expect(quota.resetText == "99/50 AI credits (manual)")
     }
 
     @Test
@@ -816,8 +828,9 @@ struct CopilotUsageProbeTests {
         #expect(settings.copilotManualUsageValue() == 99)
         
         let quota = snapshot.quotas.first!
+        #expect(quota.resetsAt != nil)
         #expect(quota.percentRemaining == 67.0)  // 99/300 = 33% used, 67% remaining
-        #expect(quota.resetText == "99/300 requests (manual)")
+        #expect(quota.resetText == "99/300 AI credits (manual)")
     }
 
     // MARK: - Error Handling Tests
@@ -890,5 +903,49 @@ struct CopilotUsageProbeTests {
         await #expect(throws: ProbeError.self) {
             try await probe.probe()
         }
+    }
+
+    @Test
+    func `probe populates resetsAt as first of next UTC month`() async throws {
+        let settings = makeSettingsRepository(username: "testuser", hasToken: true)
+        let mockNetwork = MockNetworkClient()
+        let responseJSON = """
+        {
+          "timePeriod": { "year": 2026, "month": 1 },
+          "user": "testuser",
+          "usageItems": [
+            {
+              "product": "Copilot",
+              "sku": "Copilot Premium Request",
+              "model": "Claude Sonnet 4",
+              "grossQuantity": 10.0
+            }
+          ]
+        }
+        """.data(using: .utf8)!
+
+        let response = HTTPURLResponse(
+            url: URL(string: "https://api.github.com")!,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: nil
+        )!
+
+        given(mockNetwork).request(.any).willReturn((responseJSON, response))
+
+        let probe = CopilotUsageProbe(
+            networkClient: mockNetwork,
+            settingsRepository: settings
+        )
+
+        let now = Date()
+        let snapshot = try await probe.probe()
+        let quota = try #require(snapshot.quotas.first)
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(identifier: "UTC")!
+        let comps = utc.dateComponents([.year, .month], from: now)
+        let start = try #require(utc.date(from: comps))
+        let expected = try #require(utc.date(byAdding: .month, value: 1, to: start))
+        #expect(quota.resetsAt == expected)
     }
 }

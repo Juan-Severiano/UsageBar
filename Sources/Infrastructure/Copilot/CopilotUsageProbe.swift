@@ -190,7 +190,7 @@ public struct CopilotUsageProbe: UsageProbe {
             AppLog.probes.debug("Copilot: gross=\(Int(totalGrossQuantity)), discount=\(Int(totalDiscountQuantity)), net=\(Int(totalNetQuantity)), amount=\(totalNetAmount)")
         }
 
-        // Use configured monthly limit or default to 50 (Free/Pro tier premium requests)
+        // Use configured monthly limit or default to 50 (Free/Pro tier AI credits)
         // Note: 2000 is code completions limit, not premium requests limit
         var monthlyLimit: Double = Double(settingsRepository.copilotMonthlyLimit() ?? 50)
         
@@ -238,14 +238,15 @@ public struct CopilotUsageProbe: UsageProbe {
         AppLog.probes.debug("Copilot: Used \(Int(used))/\(Int(monthlyLimit)) this month, \(Int(percentRemaining))% remaining")
 
         // Create quota with manual indicator
-        let resetText = isManual 
-            ? "\(Int(used))/\(Int(monthlyLimit)) requests (manual)"
-            : "\(Int(used))/\(Int(monthlyLimit)) requests"
-        
+        let resetText = isManual
+            ? "\(Int(used))/\(Int(monthlyLimit)) AI credits (manual)"
+            : "\(Int(used))/\(Int(monthlyLimit)) AI credits"
+
         let quota = UsageQuota(
             percentRemaining: percentRemaining,
-            quotaType: .session,
+            quotaType: .timeLimit("Monthly"),
             providerId: "copilot",
+            resetsAt: MonthlyResetDate.nextMonthlyResetDate(),
             resetText: resetText
         )
 
