@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.4.66] - 2026-06-08
+
+### Changed
+- Bug fixes and improvements.
+
+---
+
 ## [0.4.65] - 2026-06-02
 
 ### Changed
@@ -758,7 +765,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Menu bar interface with quota display
 - Automatic refresh every 5 minutes
 
-[Unreleased]: https://github.com/tddworks/ClaudeBar/compare/v0.4.65...HEAD
+[Unreleased]: https://github.com/tddworks/ClaudeBar/compare/v0.4.66...HEAD
+[0.4.66]: https://github.com/tddworks/ClaudeBar/compare/v0.4.65...v0.4.66
 [0.4.65]: https://github.com/tddworks/ClaudeBar/compare/v0.4.64...v0.4.65
 [0.4.64]: https://github.com/tddworks/ClaudeBar/compare/v0.4.63...v0.4.64
 [0.4.63]: https://github.com/tddworks/ClaudeBar/compare/v0.4.62...v0.4.63
