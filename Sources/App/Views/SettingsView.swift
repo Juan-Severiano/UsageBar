@@ -532,7 +532,12 @@ struct SettingsContentView: View {
     /// becomes equal to the primary, or the chosen provider's quotas no longer include it.
     private func normalizeSecondaryMenuBarSelection() {
         guard !settings.menuBarSecondaryQuotaKey.isEmpty else { return }
+        // An empty options list means quota data has not loaded yet (cold
+        // start, provider still syncing), not that the stored selection is
+        // invalid. Clearing here would silently discard the user's secondary
+        // window on any settings interaction during a sync.
         let validKeys = Set(secondaryMenuBarQuotaOptions.map(\.quotaType.quotaKey))
+        guard !validKeys.isEmpty else { return }
         if !validKeys.contains(settings.menuBarSecondaryQuotaKey) {
             settings.menuBarSecondaryQuotaKey = ""
         }
