@@ -16,6 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   data — fetch failures (`accountsWithoutUsage`) or providers that report
   zero limits by design (e.g. Ollama) — are listed as explicit
   "No usage reported" rows instead of being dropped.
+- Aggregated provider cards (Oh My Pi) group their quotas into one
+  collapsible section per upstream account — with compact card titles,
+  a worst-status badge per section, and an inline "No usage reported"
+  line for accounts without quota data — and the popover's content area
+  now caps at the screen height and scrolls, so the action bar can no
+  longer be pushed off-screen.
 - CLI probes now run with a PATH that includes the common install directories
   and the resolved binary's own directory, and `~/.bun/bin` is searched when
   locating tools — bun/node-shebang CLIs (like `omp`) now work from the

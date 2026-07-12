@@ -130,6 +130,7 @@ public struct OmpUsageProbe: UsageProbe {
         var seenLabels: Set<String> = []
         var accountRows: [ExtensionMetric] = []
         var seenRowLabels: Set<String> = []
+        var seenGroupTitles: Set<String> = []
 
         for (index, report) in payload.reports.enumerated() {
             let needsDiscriminator = providerReportCounts[report.provider, default: 0] > 1
@@ -145,14 +146,18 @@ public struct OmpUsageProbe: UsageProbe {
 
             let quotaCountBefore = quotas.count
 
+            let providerName = Self.upstreamDisplayName(report.provider)
+            let group = discriminator.map { "\(providerName) · \($0)" } ?? providerName
+
             for limit in report.limits {
                 guard let percentRemaining = limit.percentRemaining else { continue }
 
                 let needsMeter = windowGroupCounts[limit.windowGroupKey, default: 0] > 1
+                let meter = needsMeter ? limit.meterName : nil
                 var label = Self.quotaLabel(
                     upstreamProvider: report.provider,
                     limit: limit,
-                    meter: needsMeter ? limit.meterName : nil,
+                    meter: meter,
                     discriminator: discriminator
                 )
                 // Final guard: whatever slips through still gets a unique key.
@@ -169,20 +174,30 @@ public struct OmpUsageProbe: UsageProbe {
                         quotaType: .timeLimit(label),
                         providerId: providerId,
                         resetsAt: limit.resetDate,
-                        windowDuration: limit.windowDurationSeconds
+                        windowDuration: limit.windowDurationSeconds,
+                        group: group,
+                        compactTitle: Self.compactTitle(limit: limit, meter: meter)
                     )
                 )
             }
 
-            if quotas.count == quotaCountBefore {
+            if quotas.count > quotaCountBefore {
+                // Reserve the emitted quota-group title so a later note
+                // section can never silently collide with it.
+                seenGroupTitles.insert(group)
+            } else {
                 // Some providers deliberately report zero limits (e.g. Ollama
                 // has no standalone quota API) — a report exists, so the
                 // account is absent from `accountsWithoutUsage`. Still list it.
                 let identity = report.identityLabel ?? discriminator ?? "account \(index + 1)"
                 accountRows.append(Self.accountRow(
                     label: Self.uniqueLabel(
-                        "\(Self.upstreamDisplayName(report.provider)) · \(identity)",
+                        "\(providerName) · \(identity)",
                         seen: &seenRowLabels
+                    ),
+                    group: Self.uniqueLabel(
+                        "\(providerName) · \(Self.shortIdentity(identity))",
+                        seen: &seenGroupTitles
                     )
                 ))
             }
@@ -194,10 +209,15 @@ public struct OmpUsageProbe: UsageProbe {
         // quotas — so the card covers the full credential pool, matching
         // `omp usage`'s own account listing.
         for account in payload.accountsWithoutUsage ?? [] {
+            let providerName = Self.upstreamDisplayName(account.provider)
             accountRows.append(Self.accountRow(
                 label: Self.uniqueLabel(
-                    "\(Self.upstreamDisplayName(account.provider)) · \(account.identityLabel)",
+                    "\(providerName) · \(account.identityLabel)",
                     seen: &seenRowLabels
+                ),
+                group: Self.uniqueLabel(
+                    "\(providerName) · \(Self.shortIdentity(account.identityLabel))",
+                    seen: &seenGroupTitles
                 )
             ))
         }
@@ -228,14 +248,26 @@ public struct OmpUsageProbe: UsageProbe {
         return label
     }
 
-    /// A display row for an account that has no usable quota data.
-    private static func accountRow(label: String) -> ExtensionMetric {
+    /// A display row for an account that has no usable quota data; `group`
+    /// places it under its own account section in grouped rendering.
+    private static func accountRow(label: String, group: String) -> ExtensionMetric {
         ExtensionMetric(
             label: label,
             value: "No usage reported",
             unit: "",
-            icon: "person.crop.circle.badge.questionmark"
+            icon: "person.crop.circle.badge.questionmark",
+            group: group
         )
+    }
+
+    /// Shortens an account identity for section headers: the email local
+    /// part, or a prefix of opaque ids — mirroring quota discriminators.
+    static func shortIdentity(_ identity: String) -> String {
+        let localPart = identity.split(separator: "@").first ?? Substring(identity)
+        if localPart.count < identity.count {
+            return String(localPart.prefix(16))
+        }
+        return String(identity.prefix(16))
     }
 
     // MARK: - Label Building
@@ -260,6 +292,21 @@ public struct OmpUsageProbe: UsageProbe {
         if let discriminator, !discriminator.isEmpty {
             parts.append("· \(discriminator)")
         }
+        return parts.joined(separator: " ")
+    }
+
+    /// Builds the short in-section card title (e.g. "5h", "Spark 7d",
+    /// "Tokens 5h") — the provider/account context lives in the section
+    /// header (`UsageQuota.group`), so it is not repeated per card.
+    static func compactTitle(limit: UsageLimit, meter: String?) -> String {
+        var parts: [String] = []
+        if let tier = limit.scope?.tier, !tier.isEmpty {
+            parts.append(tier.capitalized)
+        }
+        if let meter, !meter.isEmpty {
+            parts.append(meter)
+        }
+        parts.append(limit.windowToken)
         return parts.joined(separator: " ")
     }
 

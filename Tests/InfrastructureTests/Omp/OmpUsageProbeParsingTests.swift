@@ -403,6 +403,86 @@ struct OmpUsageProbeParsingTests {
 
         #expect(labels == ["Ollama · #1", "Ollama · #2"])
         #expect(Set(labels).count == labels.count)
+        // Section titles stay clean per account — no bogus "(2)" suffixes
+        // from quota-group reservations that never emitted quotas.
+        let snapshot2 = try OmpUsageProbe.parse(json)
+        #expect(snapshot2.extensionMetrics?.map(\.group) == ["Ollama · #1", "Ollama · #2"])
+        #expect(snapshot2.hasQuotaGroups == true)
+        #expect(snapshot2.quotaGroups.map(\.title) == ["Ollama · #1", "Ollama · #2"])
+    }
+
+    // MARK: - Grouping Metadata
+
+    @Test
+    func `quotas carry group and compact title for sectioned rendering`() throws {
+        let snapshot = try OmpUsageProbe.parse(Self.sampleResponse)
+
+        let claude5h = try #require(snapshot.quota(for: .timeLimit("Claude 5h")))
+        #expect(claude5h.group == "Claude")
+        #expect(claude5h.compactTitle == "5h")
+
+        let spark = try #require(snapshot.quota(for: .timeLimit("Codex Spark 5h")))
+        #expect(spark.group == "Codex")
+        #expect(spark.compactTitle == "Spark 5h")
+
+        let fable = try #require(snapshot.quota(for: .timeLimit("Claude Fable 7d")))
+        #expect(fable.compactTitle == "Fable 7d")
+
+        // Three upstream providers → three sections, in payload order.
+        #expect(snapshot.quotaGroups.map(\.title) == ["Codex", "Claude", "Z.ai"])
+    }
+
+    @Test
+    func `duplicate accounts get per-account groups`() throws {
+        let json = """
+        { "reports": [
+          {
+            "provider": "anthropic",
+            "limits": [ {
+              "scope": { "windowId": "5h" },
+              "window": { "id": "5h", "durationMs": 18000000 },
+              "amount": { "remainingFraction": 0.9 }
+            } ],
+            "metadata": { "email": "work@example.com" }
+          },
+          {
+            "provider": "anthropic",
+            "limits": [ {
+              "scope": { "windowId": "5h" },
+              "window": { "id": "5h", "durationMs": 18000000 },
+              "amount": { "remainingFraction": 0.4 }
+            } ],
+            "metadata": { "email": "home@example.com" }
+          }
+        ] }
+        """
+        let snapshot = try OmpUsageProbe.parse(json)
+
+        #expect(snapshot.quotaGroups.map(\.title) == ["Claude · work", "Claude · home"])
+        // Card titles inside a section drop the account context entirely.
+        #expect(snapshot.quotas.allSatisfy { $0.compactTitle == "5h" })
+    }
+
+    @Test
+    func `account rows join grouped sections with short identities`() throws {
+        let json = """
+        { "reports": [ {
+            "provider": "ollama",
+            "limits": [],
+            "metadata": { "email": "local@ollama.dev" }
+        } ],
+          "accountsWithoutUsage": [
+            { "provider": "github-copilot", "type": "oauth", "email": "work@example.com" }
+          ] }
+        """
+        let snapshot = try OmpUsageProbe.parse(json)
+        let metrics = try #require(snapshot.extensionMetrics)
+
+        #expect(metrics.map(\.group) == ["Ollama · local", "Copilot · work"])
+        // Sections carry the note inline; no quota cards exist.
+        let groups = snapshot.quotaGroups
+        #expect(groups.map(\.title) == ["Ollama · local", "Copilot · work"])
+        #expect(groups.allSatisfy { $0.quotas.isEmpty && $0.note == "No usage reported" })
     }
 
     // MARK: - Upstream Display Names

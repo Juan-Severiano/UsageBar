@@ -27,6 +27,17 @@ public struct UsageQuota: Sendable, Equatable, Hashable, Comparable {
     /// nil for percentage-based quotas that have a known total.
     public let dollarRemaining: Decimal?
 
+    /// Section this quota belongs to when an aggregating provider spans
+    /// several upstream accounts (e.g. "Claude", "Claude · work").
+    /// nil for providers whose quotas render as one flat list.
+    public let group: String?
+
+    /// Short card title used when the quota renders inside its group's
+    /// section (e.g. "5h", "Spark 7d"). The UI falls back to
+    /// `quotaType.displayName` when nil. The full label stays in
+    /// `quotaType` so persisted quota keys and the menu bar are unaffected.
+    public let compactTitle: String?
+
     // MARK: - Initialization
 
     public init(
@@ -36,7 +47,9 @@ public struct UsageQuota: Sendable, Equatable, Hashable, Comparable {
         resetsAt: Date? = nil,
         resetText: String? = nil,
         windowDuration: TimeInterval? = nil,
-        dollarRemaining: Decimal? = nil
+        dollarRemaining: Decimal? = nil,
+        group: String? = nil,
+        compactTitle: String? = nil
     ) {
         self.percentRemaining = min(100, percentRemaining)  // Allow negative, cap at 100
         self.quotaType = quotaType
@@ -45,6 +58,8 @@ public struct UsageQuota: Sendable, Equatable, Hashable, Comparable {
         self.resetText = resetText
         self.windowDuration = windowDuration
         self.dollarRemaining = dollarRemaining
+        self.group = group
+        self.compactTitle = compactTitle
     }
 
     // MARK: - Domain Behavior
