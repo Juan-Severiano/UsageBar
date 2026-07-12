@@ -547,8 +547,12 @@ struct MenuContentView: View {
 
                     Spacer(minLength: 4)
 
-                    if isNoteOnly {
-                        Text(group.note ?? "No usage data")
+                    if case .headerInline(let note) = group.notePlacement {
+                        Text(note)
+                            .font(.system(size: 9, weight: .medium, design: theme.fontDesign))
+                            .foregroundStyle(theme.textTertiary)
+                    } else if isNoteOnly {
+                        Text("No usage data")
                             .font(.system(size: 9, weight: .medium, design: theme.fontDesign))
                             .foregroundStyle(theme.textTertiary)
                     } else {
@@ -569,6 +573,15 @@ struct MenuContentView: View {
             .disabled(isNoteOnly)
 
             if !isNoteOnly && !isCollapsed {
+                // A note attached to a quota-bearing section (the same
+                // account also reported "No usage" somewhere) is shown as
+                // its own row - never silently dropped.
+                if case .row(let note) = group.notePlacement {
+                    Text(note)
+                        .font(.system(size: 9, weight: .medium, design: theme.fontDesign))
+                        .foregroundStyle(theme.textTertiary)
+                }
+
                 LazyVGrid(
                     columns: [
                         GridItem(.flexible(), spacing: 10),

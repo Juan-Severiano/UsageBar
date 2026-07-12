@@ -540,12 +540,24 @@ struct OmpUsageProbeParsingTests {
     }
 
     @Test
-    func `throws parseFailed on malformed output`() {
-        #expect(throws: ProbeError.self) {
+    func `throws parseFailed on malformed output`() throws {
+        // Pin the exact error so a regression to `noData` (or any other
+        // case) fails instead of passing as "some ProbeError".
+        #expect(throws: ProbeError.parseFailed("No JSON object in omp usage output")) {
             try OmpUsageProbe.parse("not json at all")
         }
-        #expect(throws: ProbeError.self) {
-            try OmpUsageProbe.parse("{ \"reports\": [ { } ] }")
+
+        // A JSON object whose reports can't decode (missing `provider`)
+        // is a decode failure - parseFailed, never an empty-pool noData.
+        do {
+            _ = try OmpUsageProbe.parse("{ \"reports\": [ { } ] }")
+            Issue.record("Expected parse to throw on an undecodable report")
+        } catch let error as ProbeError {
+            guard case .parseFailed(let message) = error else {
+                Issue.record("Expected parseFailed, got \(error)")
+                return
+            }
+            #expect(message.hasPrefix("Malformed omp usage JSON"))
         }
     }
 

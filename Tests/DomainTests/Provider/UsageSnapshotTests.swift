@@ -429,6 +429,37 @@ struct UsageSnapshotTests {
     }
 
     @Test
+    func `note on a quota-bearing group renders as its own row`() {
+        // A metric whose group title collides with a quota group attaches
+        // its note to that section - the presentation policy must surface
+        // it as a row, never drop it (note-only sections keep the note in
+        // the header instead, where it doubles as the summary).
+        let quotas = [
+            UsageQuota(percentRemaining: 90, quotaType: .timeLimit("Claude 5h"), providerId: "omp", group: "Claude"),
+        ]
+        let metrics = [
+            ExtensionMetric(label: "Claude · solo@example.com", value: "No usage reported", unit: "", group: "Claude"),
+        ]
+        let snapshot = UsageSnapshot(providerId: "omp", quotas: quotas, capturedAt: Date(), extensionMetrics: metrics)
+
+        let groups = snapshot.quotaGroups
+        #expect(groups.count == 1)
+        #expect(groups[0].note == "No usage reported")
+        #expect(groups[0].notePlacement == .row("No usage reported"))
+    }
+
+    @Test
+    func `note placement is header-inline for note-only groups and nil without a note`() {
+        let noteOnly = QuotaGroup(title: "Copilot", quotas: [], note: "No usage reported")
+        #expect(noteOnly.notePlacement == .headerInline("No usage reported"))
+
+        let plain = QuotaGroup(title: "Claude", quotas: [
+            UsageQuota(percentRemaining: 50, quotaType: .session, providerId: "omp", group: "Claude"),
+        ])
+        #expect(plain.notePlacement == nil)
+    }
+
+    @Test
     func `ungrouped metrics do not create sections`() {
         let metrics = [
             ExtensionMetric(label: "Health", value: "OK", unit: ""),

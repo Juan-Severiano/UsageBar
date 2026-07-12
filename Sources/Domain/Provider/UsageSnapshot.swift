@@ -187,8 +187,8 @@ public struct QuotaGroup: Sendable, Equatable, Identifiable {
     public let quotas: [UsageQuota]
 
     /// Inline annotation for sections without usable quota data
-    /// (e.g. "No usage reported"). Rendered in the header; such
-    /// sections have no cards to collapse.
+    /// (e.g. "No usage reported"). See `notePlacement` for where it
+    /// renders.
     public let note: String?
 
     public var id: String { title ?? "" }
@@ -201,6 +201,21 @@ public struct QuotaGroup: Sendable, Equatable, Identifiable {
     /// The quota with the least headroom — summarized while collapsed.
     public var lowestQuota: UsageQuota? {
         quotas.min(by: { $0.percentRemaining < $1.percentRemaining })
+    }
+
+    /// Where a group's note renders. Note-only sections have no cards
+    /// to collapse, so the note doubles as the header summary; sections
+    /// that also carry quotas show the note as its own row above the
+    /// cards — it must never be silently dropped.
+    public enum NotePlacement: Sendable, Equatable {
+        case headerInline(String)
+        case row(String)
+    }
+
+    /// The presentation decision for `note`, nil when there is none.
+    public var notePlacement: NotePlacement? {
+        guard let note else { return nil }
+        return quotas.isEmpty ? .headerInline(note) : .row(note)
     }
 
     public init(title: String?, quotas: [UsageQuota], note: String? = nil) {
