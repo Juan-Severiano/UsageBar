@@ -357,6 +357,57 @@ struct SettingsContentView: View {
         }
     }
 
+    /// Opt-in stacked rendering for the dual-window label: the two windows
+    /// draw as two smaller lines instead of one long "A | B" line, roughly
+    /// halving the menu bar width the label occupies.
+    private var menuBarStackedToggle: some View {
+        HStack {
+            Text("Stack in Menu Bar")
+                .font(.system(size: 12, weight: .medium, design: theme.fontDesign))
+                .foregroundStyle(theme.textSecondary)
+
+            Spacer()
+
+            Toggle("", isOn: Binding(
+                get: { settings.menuBarStackedEnabled },
+                set: { enabled in
+                    settings.menuBarStackedEnabled = enabled
+                }
+            ))
+            .toggleStyle(.switch)
+            .tint(theme.accentPrimary)
+            .scaleEffect(0.8)
+            .labelsHidden()
+        }
+    }
+
+    /// Size selector for the stacked lines. Small is the original 9pt
+    /// rendering; Medium and Large enlarge both lines to 10pt and 11pt while
+    /// the renderer keeps their ink inside the menu bar's height limit.
+    /// Rendered as a labelled chip row (like PROVIDER and QUOTA above) so the
+    /// control speaks the section's choice-button language instead of a
+    /// system segmented picker.
+    private var menuBarStackedSizePicker: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("STACKED TEXT SIZE")
+                .font(.system(size: 9, weight: .semibold, design: theme.fontDesign))
+                .foregroundStyle(theme.textSecondary)
+                .tracking(0.5)
+
+            HStack(spacing: 8) {
+                ForEach(MenuBarStackedSize.allCases, id: \.self) { size in
+                    MenuBarChoiceButton(
+                        iconName: size.choiceIconName,
+                        label: size.displayLabel,
+                        isSelected: settings.menuBarStackedSize == size
+                    ) {
+                        settings.menuBarStackedSize = size
+                    }
+                }
+            }
+        }
+    }
+
     private var menuBarControls: some View {
         VStack(alignment: .leading, spacing: 10) {
             VStack(alignment: .leading, spacing: 6) {
@@ -448,6 +499,18 @@ struct SettingsContentView: View {
                             }
                         }
                     }
+
+                    // Stacking only changes how two windows render, so the
+                    // toggle appears once a secondary window is selected.
+                    if !settings.menuBarSecondaryQuotaKey.isEmpty {
+                        menuBarStackedToggle
+
+                        // The size only matters while stacking is actually
+                        // rendering, so it appears with the toggle on.
+                        if settings.menuBarStackedEnabled {
+                            menuBarStackedSizePicker
+                        }
+                    }
                 }
             }
         }
@@ -469,7 +532,12 @@ struct SettingsContentView: View {
     /// becomes equal to the primary, or the chosen provider's quotas no longer include it.
     private func normalizeSecondaryMenuBarSelection() {
         guard !settings.menuBarSecondaryQuotaKey.isEmpty else { return }
+        // An empty options list means quota data has not loaded yet (cold
+        // start, provider still syncing), not that the stored selection is
+        // invalid. Clearing here would silently discard the user's secondary
+        // window on any settings interaction during a sync.
         let validKeys = Set(secondaryMenuBarQuotaOptions.map(\.quotaType.quotaKey))
+        guard !validKeys.isEmpty else { return }
         if !validKeys.contains(settings.menuBarSecondaryQuotaKey) {
             settings.menuBarSecondaryQuotaKey = ""
         }
