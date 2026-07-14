@@ -25,6 +25,8 @@ struct UsageQuotaTests {
         #expect(quota.percentRemaining == 65)
         #expect(quota.quotaType == QuotaType.session)
         #expect(quota.providerId == "claude")
+        #expect(quota.dollarUsed == nil)
+        #expect(quota.dollarCap == nil)
     }
 
     @Test
@@ -377,6 +379,21 @@ struct UsageQuotaTests {
 
         // When & Then
         #expect(quota.formattedDollarRemaining == nil)
+    }
+
+    @Test
+    func `quota stores capped dollar spend amounts`() {
+        let quota = UsageQuota(
+            percentRemaining: 75,
+            quotaType: .timeLimit("Claude Extra"),
+            providerId: "omp",
+            dollarUsed: Decimal(string: "123.45"),
+            dollarCap: 500
+        )
+
+        #expect(quota.dollarUsed == Decimal(string: "123.45"))
+        #expect(quota.dollarCap == 500)
+        #expect(quota.dollarRemaining == nil)
     }
 
     // MARK: - Burn Rate

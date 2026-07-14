@@ -27,6 +27,14 @@ public struct UsageQuota: Sendable, Equatable, Hashable, Comparable {
     /// nil for percentage-based quotas that have a known total.
     public let dollarRemaining: Decimal?
 
+    /// Dollars spent for a capped spend meter.
+    /// Co-occurs with `dollarCap`; nil for percentage and balance meters.
+    public let dollarUsed: Decimal?
+
+    /// Dollar cap for a capped spend meter.
+    /// Co-occurs with `dollarUsed`; nil for percentage and balance meters.
+    public let dollarCap: Decimal?
+
     /// Section this quota belongs to when an aggregating provider spans
     /// several upstream accounts (e.g. "Claude", "Claude · work").
     /// nil for providers whose quotas render as one flat list.
@@ -48,6 +56,8 @@ public struct UsageQuota: Sendable, Equatable, Hashable, Comparable {
         resetText: String? = nil,
         windowDuration: TimeInterval? = nil,
         dollarRemaining: Decimal? = nil,
+        dollarUsed: Decimal? = nil,
+        dollarCap: Decimal? = nil,
         group: String? = nil,
         compactTitle: String? = nil
     ) {
@@ -58,6 +68,8 @@ public struct UsageQuota: Sendable, Equatable, Hashable, Comparable {
         self.resetText = resetText
         self.windowDuration = windowDuration
         self.dollarRemaining = dollarRemaining
+        self.dollarUsed = dollarUsed
+        self.dollarCap = dollarCap
         self.group = group
         self.compactTitle = compactTitle
     }
