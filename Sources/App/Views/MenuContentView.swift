@@ -1004,14 +1004,17 @@ struct WrappedStatCard: View {
                    let dollarCap = quota.formattedDollarCap {
                     HStack(alignment: .firstTextBaseline, spacing: 2) {
                         Text(dollarUsed)
-                            .font(.system(size: 28, weight: .heavy, design: theme.fontDesign))
+                            .font(.system(size: 20, weight: .heavy, design: theme.fontDesign))
                             .foregroundStyle(theme.textPrimary)
                             .contentTransition(.numericText())
 
                         Text("of \(dollarCap)")
-                            .font(.system(size: 12, weight: .semibold, design: theme.fontDesign))
+                            .font(.system(size: 9, weight: .semibold, design: theme.fontDesign))
                             .foregroundStyle(theme.textSecondary)
                     }
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                    .layoutPriority(1)
                 } else if let dollarText = quota.formattedDollarRemaining {
                     Text(dollarText)
                         .font(.system(size: 18, weight: .bold, design: theme.fontDesign))
@@ -1030,10 +1033,11 @@ struct WrappedStatCard: View {
                     }
                 }
 
-                Spacer()
+                Spacer(minLength: 4)
 
                 Text(valueCaption)
-                    .font(.system(size: 12, weight: .medium, design: theme.fontDesign))
+                    .font(.system(size: isCappedSpend ? 10 : 12, weight: .medium, design: theme.fontDesign))
+                    .fixedSize()
                     .foregroundStyle(effectiveDisplayMode == .pace ? paceColor.opacity(0.8) : theme.textTertiary)
             }
 
