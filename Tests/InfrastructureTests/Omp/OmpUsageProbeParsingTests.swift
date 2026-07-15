@@ -211,6 +211,30 @@ struct OmpUsageProbeParsingTests {
     }
 
     @Test
+    func `monetary decode keeps cent-boundary values exact`() throws {
+        // Decimal decodes straight from the JSON number token: 1.005 rounds
+        // to $1.01. A Double round-trip would decode 1.00499… and show $1.00.
+        let json = """
+        { "reports": [ {
+            "provider": "anthropic",
+            "limits": [ {
+              "scope": { "windowId": "extra" },
+              "amount": { "used": 1.005, "limit": 1.25e1, "unit": "usd" }
+            } ]
+        } ] }
+        """
+
+        let snapshot = try OmpUsageProbe.parse(json)
+        let quota = try #require(snapshot.quota(for: .timeLimit("Claude Extra")))
+
+        #expect(quota.dollarUsed == Decimal(string: "1.01"))
+        #expect(quota.dollarCap == Decimal(string: "12.5"))
+        // Derived percent math (no explicit fractions): (12.5-1.005)/12.5.
+        let percent = try #require(quota.percentRemaining)
+        #expect(abs(percent - 91.96) < 0.0001)
+    }
+
+    @Test
     func `monetary label falls back to window id`() throws {
         let json = """
         { "reports": [ {

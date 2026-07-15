@@ -695,8 +695,10 @@ private struct MoneyData: Decodable {
     let currency: String?
     let exponent: Int?
 
+    /// Negative spend is not a valid payload state; reject the row rather
+    /// than silently flipping the sign.
     var amount: Decimal? {
-        guard let amountMinor, let exponent, exponent >= 0 else { return nil }
+        guard let amountMinor, amountMinor >= 0, let exponent, exponent >= 0 else { return nil }
         return Decimal(sign: .plus, exponent: -exponent, significand: amountMinor)
     }
 
@@ -722,7 +724,7 @@ private struct ExtraUsageData: Decodable {
     }
 
     private func scaledAmount(_ amount: Decimal?) -> Decimal? {
-        guard let amount else { return nil }
+        guard let amount, amount >= 0 else { return nil }
         let places = decimalPlaces ?? 2
         guard places >= 0 else { return nil }
         return Decimal(sign: .plus, exponent: -places, significand: amount)

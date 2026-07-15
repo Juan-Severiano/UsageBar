@@ -508,7 +508,8 @@ public struct OmpUsageProbe: UsageProbe {
                 return (1 - used) * 100
             }
             if let used = amount?.used, let limit = amount?.limit, limit > 0 {
-                return (limit - used) / limit * 100
+                let fraction = (limit - used) / limit * 100
+                return NSDecimalNumber(decimal: fraction).doubleValue
             }
             return nil
         }
@@ -563,8 +564,11 @@ public struct OmpUsageProbe: UsageProbe {
     }
 
     struct LimitAmount: Decodable {
-        let used: Double?
-        let limit: Double?
+        /// Monetary fields decode as `Decimal` straight from the JSON number
+        /// token, so cent-boundary values like 1.005 never pick up binary
+        /// floating-point error before rounding.
+        let used: Decimal?
+        let limit: Decimal?
         let remaining: Double?
         let usedFraction: Double?
         let remainingFraction: Double?
@@ -578,9 +582,8 @@ public struct OmpUsageProbe: UsageProbe {
             Self.roundedMoney(limit)
         }
 
-        private static func roundedMoney(_ value: Double?) -> Decimal? {
-            guard let value else { return nil }
-            var decimal = Decimal(value)
+        private static func roundedMoney(_ value: Decimal?) -> Decimal? {
+            guard var decimal = value else { return nil }
             var rounded = Decimal()
             NSDecimalRound(&rounded, &decimal, 2, .plain)
             return rounded

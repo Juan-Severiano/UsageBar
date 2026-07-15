@@ -728,6 +728,48 @@ struct ClaudeAPIUsageProbeTests {
     }
 
     @Test
+    func `probe rejects negative spend and falls back to legacy extra usage`() async throws {
+        let snapshot = try await probe(responseJSON: """
+        {
+          "spend": {
+            "enabled": true,
+            "used": { "amount_minor": -125, "currency": "USD", "exponent": 2 },
+            "limit": { "amount_minor": 1000, "currency": "USD", "exponent": 2 }
+          },
+          "extra_usage": {
+            "is_enabled": true,
+            "used_credits": 541,
+            "monthly_limit": 2000,
+            "decimal_places": 2
+          }
+        }
+        """)
+
+        // A negative amount_minor is invalid; the spend row is dropped
+        // instead of silently flipping to +$1.25, and legacy takes over.
+        #expect(snapshot.costUsage?.totalCost == Decimal(string: "5.41"))
+        #expect(snapshot.costUsage?.budget == Decimal(string: "20"))
+        #expect(snapshot.costUsage?.kind == .extraUsage)
+    }
+
+    @Test
+    func `probe drops negative legacy credits instead of flipping sign`() async throws {
+        let snapshot = try await probe(responseJSON: """
+        {
+          "five_hour": { "utilization": 10.0, "resets_at": "2025-01-15T10:00:00Z" },
+          "extra_usage": {
+            "is_enabled": true,
+            "used_credits": -541,
+            "monthly_limit": 2000,
+            "decimal_places": 2
+          }
+        }
+        """)
+
+        #expect(snapshot.costUsage == nil)
+    }
+
+    @Test
     func `probe parses uncapped spend exactly`() async throws {
         let snapshot = try await probe(responseJSON: """
         {
