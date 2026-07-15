@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+---
+
+## [0.4.72] - 2026-07-15
+
 ### Fixed
 - Oh My Pi no longer shows duplicate "No usage reported" account rows when
   org-less stale credentials share an email with an account that already
@@ -851,7 +855,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Menu bar interface with quota display
 - Automatic refresh every 5 minutes
 
-[Unreleased]: https://github.com/tddworks/ClaudeBar/compare/v0.4.71...HEAD
+[Unreleased]: https://github.com/tddworks/ClaudeBar/compare/v0.4.72...HEAD
+[0.4.72]: https://github.com/tddworks/ClaudeBar/compare/v0.4.71...v0.4.72
 [0.4.71]: https://github.com/tddworks/ClaudeBar/compare/v0.4.70...v0.4.71
 [0.4.70]: https://github.com/tddworks/ClaudeBar/compare/v0.4.69...v0.4.70
 [0.4.69]: https://github.com/tddworks/ClaudeBar/compare/v0.4.68...v0.4.69
